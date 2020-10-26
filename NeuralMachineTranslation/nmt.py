@@ -159,6 +159,33 @@ class Decoder(tf.keras.Model):
         x = self.fc(output)
         
         return x, state, attention_weights
+    
+# Output Decoder Model without Attention
+class DecoderNoAttention(tf.keras.Model):
+    def __init__(self, vocab_size, embedding_dim, dec_units, batch_sz):
+        super(DecoderNoAttention, self).__init__()
+        self.batch_sz = batch_sz
+        self.dec_units = dec_units
+        self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_dim)
+        self.gru = tf.keras.layers.GRU(self.dec_units,
+                                   return_sequences=True,
+                                   return_state=True,
+                                   recurrent_initializer='glorot_uniform')
+        self.fc = tf.keras.layers.Dense(vocab_size)
+
+    def call(self, x, hidden, enc_output):
+        x = self.embedding(x)
+        
+        # passing the concatenated vector to the GRU
+        output, state = self.gru(x)
+        
+        # output shape == (batch_size * 1, hidden_size)
+        output = tf.reshape(output, (-1, output.shape[2]))
+        
+        # output shape == (batch_size, vocab)
+        x = self.fc(output)
+        
+        return x, state, []
 
 def loss_function(real, pred, loss_object):
     mask = tf.math.logical_not(tf.math.equal(real, 0))
@@ -171,7 +198,7 @@ def loss_function(real, pred, loss_object):
 
 @tf.function
 def train_step(inp, targ, enc_hidden, encoder, targ_lang, decoder, 
-               BATCH_SIZE, optimizer, loss_object):
+               BATCH_SIZE, optimizer, loss_object, use_attention):
     loss = 0
     
     with tf.GradientTape() as tape:
@@ -203,8 +230,9 @@ def train_step(inp, targ, enc_hidden, encoder, targ_lang, decoder,
         
 # Test the model
 def evaluate(sentence, max_length_targ, max_length_inp, inp_lang, units, 
-             encoder, targ_lang, decoder):
-    attention_plot = np.zeros((max_length_targ, max_length_inp))
+             encoder, targ_lang, decoder, use_attention):
+    if use_attention == True:
+        attention_plot = np.zeros((max_length_targ, max_length_inp))
 
     sentence = preprocess_sentence(sentence)
     
@@ -221,28 +249,47 @@ def evaluate(sentence, max_length_targ, max_length_inp, inp_lang, units,
     
     dec_hidden = enc_hidden
     dec_input = tf.expand_dims([targ_lang.word_index['<start>']], 0)
+    # Using attention
+    if use_attention == True:
+        for t in range(max_length_targ):
+            predictions, dec_hidden, attention_weights = decoder(dec_input,
+                                                                 dec_hidden,
+                                                                 enc_out)
+
+            # storing the attention weights to plot later on
+            attention_weights = tf.reshape(attention_weights, (-1, ))
+            attention_plot[t] = attention_weights.numpy()
+        
+            predicted_id = tf.argmax(predictions[0]).numpy()
+        
+            result += targ_lang.index_word[predicted_id] + ' '
+
+            if targ_lang.index_word[predicted_id] == '<end>':
+                return result, sentence, attention_plot
+        
+            # the predicted ID is fed back into the model
+            dec_input = tf.expand_dims([predicted_id], 0)
     
-    for t in range(max_length_targ):
-        predictions, dec_hidden, attention_weights = decoder(dec_input,
-                                                             dec_hidden,
-                                                             enc_out)
+    # Without attention
+    elif use_attention == False:
+        attention_plot = None
+        for t in range(max_length_targ):
+            predictions, dec_hidden, _ = decoder(dec_input,
+                                                 dec_hidden,
+                                                 enc_out)
+        
+            predicted_id = tf.argmax(predictions[0]).numpy()
+        
+            result += targ_lang.index_word[predicted_id] + ' '
 
-        # storing the attention weights to plot later on
-        attention_weights = tf.reshape(attention_weights, (-1, ))
-        attention_plot[t] = attention_weights.numpy()
-        
-        predicted_id = tf.argmax(predictions[0]).numpy()
-        
-        result += targ_lang.index_word[predicted_id] + ' '
-
-        if targ_lang.index_word[predicted_id] == '<end>':
-            return result, sentence, attention_plot
-        
-        # the predicted ID is fed back into the model
-        dec_input = tf.expand_dims([predicted_id], 0)
+            if targ_lang.index_word[predicted_id] == '<end>':
+                return result, sentence, attention_plot
+            
+            # the predicted ID is fed back into the model
+            dec_input = tf.expand_dims([predicted_id], 0)
 
     return result, sentence, attention_plot
-
+    
 # function for plotting the attention weights
 def plot_attention(attention, sentence, predicted_sentence):
     fig = plt.figure(figsize=(10,10))
@@ -260,13 +307,21 @@ def plot_attention(attention, sentence, predicted_sentence):
     plt.show()
 
 def translate(sentence, max_length_targ, max_length_inp, inp_lang, units, 
-             encoder, targ_lang, decoder):
-    result, sentence, attention_plot = evaluate(sentence, max_length_targ, 
-                                                max_length_inp, inp_lang, units, 
-                                                encoder, targ_lang, decoder)
+             encoder, targ_lang, decoder, use_attention):
+    if use_attention == True:
+        result, sentence, attention_plot = evaluate(sentence, max_length_targ, 
+                                                    max_length_inp, inp_lang, units, 
+                                                    encoder, targ_lang, decoder, use_attention)
     
-    print('Input: %s' % (sentence))
-    print('Predicted translation: {}'.format(result))
+        print('Input: %s' % (sentence))
+        print('Predicted translation: {}'.format(result))
     
-    attention_plot = attention_plot[:len(result.split(' ')), :len(sentence.split(' '))]
-    plot_attention(attention_plot, sentence.split(' '), result.split(' '))
+        attention_plot = attention_plot[:len(result.split(' ')), :len(sentence.split(' '))]
+        plot_attention(attention_plot, sentence.split(' '), result.split(' '))
+    elif use_attention == False:
+        result, sentence, attention_plot = evaluate(sentence, max_length_targ, 
+                                                    max_length_inp, inp_lang, units, 
+                                                    encoder, targ_lang, decoder, use_attention)
+    
+        print('Input: %s' % (sentence))
+        print('Predicted translation: {}'.format(result))

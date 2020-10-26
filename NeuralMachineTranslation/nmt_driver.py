@@ -1,4 +1,7 @@
-from nmt import load_dataset, Encoder, BahdanauAttention, Decoder, train_step, translate
+from nmt import load_dataset, Encoder, \
+                BahdanauAttention, Decoder, \
+                train_step, translate,\
+                DecoderNoAttention
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import os
@@ -9,7 +12,7 @@ path = 'c:\\Users\\Neeve Kadosh\\Desktop\\College\\AI_ML\\datasets\\LanguageTran
 filename = path + 'spa.txt'
 
 # Set to None to use full dataset
-num_samples = 30000
+num_samples = 20000
 input_tensor, target_tensor, inp_lang, targ_lang = load_dataset(filename, num_samples)
 
 # Calculate max_length of the target tensors
@@ -24,8 +27,8 @@ input_tensor_train, input_tensor_val, target_tensor_train, target_tensor_val = \
 BUFFER_SIZE = len(input_tensor_train)
 BATCH_SIZE = 64
 steps_per_epoch = len(input_tensor_train)//BATCH_SIZE
-embedding_dim = 256
-units = 1024
+embedding_dim = 512
+units = 512
 vocab_inp_size = len(inp_lang.word_index)+1
 vocab_tar_size = len(targ_lang.word_index)+1
 
@@ -41,6 +44,8 @@ encoder = Encoder(vocab_inp_size, embedding_dim, units, BATCH_SIZE)
 attention_layer = BahdanauAttention(10)
 # Instantiate decoder model
 decoder = Decoder(vocab_tar_size, embedding_dim, units, BATCH_SIZE)
+# Instantiate decoder without attention model
+decoder_no_attention = DecoderNoAttention(vocab_tar_size, embedding_dim, units, BATCH_SIZE)
 
 # Sample encoder input states
 sample_hidden = encoder.initialize_hidden_state()
@@ -64,17 +69,23 @@ checkpoint = tf.train.Checkpoint(optimizer=optimizer,
 
 # Declare number of epochs
 EPOCHS = 10
-
+use_attention = False
 # Train model
 for epoch in range(EPOCHS):
     start = time.time()
 
     enc_hidden = encoder.initialize_hidden_state()
     total_loss = 0
-
+    
     for (batch, (inp, targ)) in enumerate(dataset.take(steps_per_epoch)):
-        batch_loss = train_step(inp, targ, enc_hidden, encoder, targ_lang, 
-                                decoder, BATCH_SIZE, optimizer, loss_object)
+        if use_attention == True:
+            batch_loss = train_step(inp, targ, enc_hidden, encoder, targ_lang, 
+                                decoder, BATCH_SIZE, optimizer, loss_object,
+                                use_attention)
+        elif use_attention == False:
+            batch_loss = train_step(inp, targ, enc_hidden, encoder, targ_lang, 
+                                decoder_no_attention, BATCH_SIZE, optimizer, 
+                                loss_object, use_attention)
         total_loss += batch_loss
 
         if batch % 100 == 0:
@@ -92,6 +103,10 @@ for epoch in range(EPOCHS):
 # restoring the latest checkpoint in checkpoint_dir
 checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
 
-sentence = u'hace mucho frio aqui.'
-translate(sentence, max_length_targ, max_length_inp, inp_lang, units, 
-              encoder, targ_lang, decoder)
+sentence = u'¡Corre!'
+if use_attention == True:
+    translate(sentence, max_length_targ, max_length_inp, inp_lang, units, 
+              encoder, targ_lang, decoder, use_attention)
+elif use_attention == False:
+    translate(sentence, max_length_targ, max_length_inp, inp_lang, units, 
+              encoder, targ_lang, decoder_no_attention, use_attention)
